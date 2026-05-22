@@ -1,0 +1,201 @@
+{
+  "name": "Shopify Backup – Google Drive",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "triggerAtHour": 3, "triggerAtMinute": 0 }]
+        }
+      },
+      "id": "gd-0001",
+      "name": "Daily at 3 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [180, 300]
+    },
+    {
+      "parameters": {
+        "command": "=node {{ $env.SHOPIFY_BACKUP_SCRIPT_PATH || '/opt/shopify-backup/shopify-backup.mjs' }}",
+        "options": {
+          "env": {
+            "env": [
+              { "name": "SHOPIFY_STORE", "value": "={{ $env.SHOPIFY_STORE }}" },
+              { "name": "SHOPIFY_ACCESS_TOKEN", "value": "={{ $env.SHOPIFY_ACCESS_TOKEN }}" },
+              { "name": "SHOPIFY_API_VERSION", "value": "={{ $env.SHOPIFY_API_VERSION || '2025-01' }}" },
+              { "name": "BACKUP_OUTPUT_DIR", "value": "/tmp/shopify-gdrive" }
+            ]
+          },
+          "timeout": 3600000
+        }
+      },
+      "id": "gd-0002",
+      "name": "Run Data Backup",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [380, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = $input.first().json.stdout?.trim();\nconst stderr = $input.first().json.stderr || '';\nconst exitCode = $input.first().json.exitCode;\n\nif (exitCode !== 0) {\n  throw new Error(`Data backup failed (exit ${exitCode}):\\n${stderr.split('\\n').slice(-10).join('\\n')}`);\n}\n\nreturn [{ json: { filepath: stdout, filename: stdout.split('/').pop() } }];"
+      },
+      "id": "gd-0003",
+      "name": "Parse Backup Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [580, 200]
+    },
+    {
+      "parameters": {
+        "filePath": "={{ $json.filepath }}"
+      },
+      "id": "gd-0004",
+      "name": "Read Backup File",
+      "type": "n8n-nodes-base.readBinaryFiles",
+      "typeVersion": 1,
+      "position": [780, 200]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "folderId": "={{ $env.GDRIVE_BACKUP_FOLDER_ID || 'root' }}",
+        "name": "={{ $('Parse Backup Output').item.json.filename }}",
+        "options": {}
+      },
+      "id": "gd-0005",
+      "name": "Upload JSON to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [980, 200],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Drive OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "command": "=rm -f {{ $('Parse Backup Output').item.json.filepath }} 2>/dev/null; echo 'cleaned up'"
+      },
+      "id": "gd-0006",
+      "name": "Cleanup Temp JSON",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1180, 200]
+    },
+    {
+      "parameters": {
+        "command": "=node {{ $env.SHOPIFY_MEDIA_SCRIPT_PATH || '/opt/shopify-backup/shopify-media-sync.mjs' }}",
+        "options": {
+          "env": {
+            "env": [
+              { "name": "SHOPIFY_STORE", "value": "={{ $env.SHOPIFY_STORE }}" },
+              { "name": "SHOPIFY_ACCESS_TOKEN", "value": "={{ $env.SHOPIFY_ACCESS_TOKEN }}" },
+              { "name": "SHOPIFY_API_VERSION", "value": "={{ $env.SHOPIFY_API_VERSION || '2025-01' }}" },
+              { "name": "MEDIA_OUTPUT_DIR", "value": "={{ $env.GDRIVE_MEDIA_STAGING || '/home/node/data/gdrive-media-cache' }}" },
+              { "name": "MEDIA_CONCURRENCY", "value": "6" }
+            ]
+          },
+          "timeout": 7200000
+        }
+      },
+      "id": "gd-0007",
+      "name": "Run Media Sync",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1380, 200],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "command": "=rclone copy {{ $env.GDRIVE_MEDIA_STAGING || '/home/node/data/gdrive-media-cache' }} {{ $env.RCLONE_REMOTE || 'gdrive' }}:{{ $env.RCLONE_MEDIA_PATH || 'Shopify Backups/media' }} --transfers=8 --checkers=4 --stats-one-line --stats=0 2>&1 || echo 'RCLONE_ERROR'",
+        "options": { "timeout": 7200000 }
+      },
+      "id": "gd-0008",
+      "name": "Rclone Media to Google Drive",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1580, 200],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const backupFile = $('Parse Backup Output').first().json.filename || 'unknown';\nconst rcloneOut = $('Rclone Media to Google Drive').first().json.stdout || '';\n\nreturn [{\n  json: {\n    status: 'success',\n    backup_file: backupFile,\n    rclone_ok: !rcloneOut.includes('RCLONE_ERROR'),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "gd-0009",
+      "name": "Success Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1780, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst stderr = input.stderr || input.message || 'Unknown error';\n\nreturn [{\n  json: {\n    status: 'failed',\n    error: stderr.split('\\n').slice(-15).join('\\n'),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "gd-0010",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [580, 480]
+    },
+    {
+      "parameters": {},
+      "id": "gd-0011",
+      "name": "Notify on Failure",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [780, 480],
+      "notesInFlow": true,
+      "notes": "Connect your preferred notification:\n- Email / SMTP\n- Slack\n- Telegram\n- Webhook\n\nError in: $json.error"
+    }
+  ],
+  "connections": {
+    "Daily at 3 AM": {
+      "main": [[{ "node": "Run Data Backup", "type": "main", "index": 0 }]]
+    },
+    "Run Data Backup": {
+      "main": [
+        [{ "node": "Parse Backup Output", "type": "main", "index": 0 }],
+        [{ "node": "Error Handler", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Backup Output": {
+      "main": [[{ "node": "Read Backup File", "type": "main", "index": 0 }]]
+    },
+    "Read Backup File": {
+      "main": [[{ "node": "Upload JSON to Google Drive", "type": "main", "index": 0 }]]
+    },
+    "Upload JSON to Google Drive": {
+      "main": [[{ "node": "Cleanup Temp JSON", "type": "main", "index": 0 }]]
+    },
+    "Cleanup Temp JSON": {
+      "main": [[{ "node": "Run Media Sync", "type": "main", "index": 0 }]]
+    },
+    "Run Media Sync": {
+      "main": [
+        [{ "node": "Rclone Media to Google Drive", "type": "main", "index": 0 }],
+        [{ "node": "Error Handler", "type": "main", "index": 0 }]
+      ]
+    },
+    "Rclone Media to Google Drive": {
+      "main": [
+        [{ "node": "Success Summary", "type": "main", "index": 0 }],
+        [{ "node": "Error Handler", "type": "main", "index": 0 }]
+      ]
+    },
+    "Error Handler": {
+      "main": [[{ "node": "Notify on Failure", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "timezone": "Europe/Amsterdam"
+  },
+  "tags": [{ "name": "shopify" }, { "name": "backup" }, { "name": "gdrive" }],
+  "pinData": {}
+}

@@ -1,0 +1,148 @@
+{
+  "name": "Shopify Backup – Local (Offline)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "triggerAtHour": 2, "triggerAtMinute": 0 }]
+        }
+      },
+      "id": "loc-0001",
+      "name": "Daily at 2 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "command": "=node {{ $env.SHOPIFY_BACKUP_SCRIPT_PATH || '/opt/shopify-backup/shopify-backup.mjs' }}",
+        "options": {
+          "env": {
+            "env": [
+              { "name": "SHOPIFY_STORE", "value": "={{ $env.SHOPIFY_STORE }}" },
+              { "name": "SHOPIFY_ACCESS_TOKEN", "value": "={{ $env.SHOPIFY_ACCESS_TOKEN }}" },
+              { "name": "SHOPIFY_API_VERSION", "value": "={{ $env.SHOPIFY_API_VERSION || '2025-01' }}" },
+              { "name": "BACKUP_OUTPUT_DIR", "value": "={{ $env.BACKUP_DATA_DIR || '/backups/data' }}" }
+            ]
+          },
+          "timeout": 3600000
+        }
+      },
+      "id": "loc-0002",
+      "name": "Run Data Backup",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [440, 300],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = $input.first().json.stdout?.trim();\nconst stderr = $input.first().json.stderr || '';\nconst exitCode = $input.first().json.exitCode;\n\nif (exitCode !== 0) {\n  throw new Error(`Data backup failed (exit ${exitCode}):\\n${stderr.split('\\n').slice(-10).join('\\n')}`);\n}\n\nreturn [{ json: { filepath: stdout, filename: stdout.split('/').pop() } }];"
+      },
+      "id": "loc-0003",
+      "name": "Parse Backup Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 200]
+    },
+    {
+      "parameters": {
+        "command": "=node {{ $env.SHOPIFY_MEDIA_SCRIPT_PATH || '/opt/shopify-backup/shopify-media-sync.mjs' }}",
+        "options": {
+          "env": {
+            "env": [
+              { "name": "SHOPIFY_STORE", "value": "={{ $env.SHOPIFY_STORE }}" },
+              { "name": "SHOPIFY_ACCESS_TOKEN", "value": "={{ $env.SHOPIFY_ACCESS_TOKEN }}" },
+              { "name": "SHOPIFY_API_VERSION", "value": "={{ $env.SHOPIFY_API_VERSION || '2025-01' }}" },
+              { "name": "MEDIA_OUTPUT_DIR", "value": "={{ $env.BACKUP_MEDIA_DIR || '/backups/media' }}" },
+              { "name": "MEDIA_CONCURRENCY", "value": "6" }
+            ]
+          },
+          "timeout": 7200000
+        }
+      },
+      "id": "loc-0004",
+      "name": "Run Media Sync",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [880, 200],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "command": "=find {{ $env.BACKUP_DATA_DIR || '/backups/data' }} -name '*.json' -mtime +30 -delete 2>&1; echo \"Retention cleanup done\""
+      },
+      "id": "loc-0005",
+      "name": "Retention: Keep 30 Days",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const backupFile = $('Parse Backup Output').first().json.filename || 'unknown';\nconst mediaStderr = $('Run Media Sync').first().json.stderr || '';\nconst dlMatch = mediaStderr.match(/Downloaded:\\s*(\\d+)/i);\nconst skipMatch = mediaStderr.match(/Skipped.*?:\\s*(\\d+)/i);\n\nreturn [{\n  json: {\n    status: 'success',\n    backup_file: backupFile,\n    media_downloaded: dlMatch?.[1] || '0',\n    media_skipped: skipMatch?.[1] || '0',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "loc-0006",
+      "name": "Success Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1320, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst stderr = input.stderr || input.message || 'Unknown error';\n\nreturn [{\n  json: {\n    status: 'failed',\n    error: stderr.split('\\n').slice(-15).join('\\n'),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "loc-0007",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 480]
+    },
+    {
+      "parameters": {},
+      "id": "loc-0008",
+      "name": "Notify on Failure",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [880, 480],
+      "notesInFlow": true,
+      "notes": "Connect your preferred notification:\n- Email / SMTP\n- Slack\n- Telegram\n- Webhook\n\nError in: $json.error"
+    }
+  ],
+  "connections": {
+    "Daily at 2 AM": {
+      "main": [[{ "node": "Run Data Backup", "type": "main", "index": 0 }]]
+    },
+    "Run Data Backup": {
+      "main": [
+        [{ "node": "Parse Backup Output", "type": "main", "index": 0 }],
+        [{ "node": "Error Handler", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Backup Output": {
+      "main": [[{ "node": "Run Media Sync", "type": "main", "index": 0 }]]
+    },
+    "Run Media Sync": {
+      "main": [
+        [{ "node": "Retention: Keep 30 Days", "type": "main", "index": 0 }],
+        [{ "node": "Error Handler", "type": "main", "index": 0 }]
+      ]
+    },
+    "Retention: Keep 30 Days": {
+      "main": [[{ "node": "Success Summary", "type": "main", "index": 0 }]]
+    },
+    "Error Handler": {
+      "main": [[{ "node": "Notify on Failure", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "timezone": "Europe/Amsterdam"
+  },
+  "tags": [{ "name": "shopify" }, { "name": "backup" }, { "name": "local" }],
+  "pinData": {}
+}

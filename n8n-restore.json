@@ -1,0 +1,160 @@
+{
+  "name": "Shopify Restore from Backup",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "rst-0001",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [220, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "/*\n * RESTORE CONFIGURATION — edit before running\n *\n * source: 'local' to read from NAS, or 'gdrive' to download from Google Drive.\n *\n * backup_path: (local) Full path to backup JSON on NAS.\n *   Example: '/backups/data/shopify-backup_mystore_2025-06-15T02-00-00.json'\n *\n * backup_file_id: (gdrive) Google Drive file ID of the backup JSON.\n *   Only needed when source is 'gdrive'.\n *\n * resources: Comma-separated list, or 'all'.\n *   Available: products, product_metafields, variant_metafields, inventory,\n *     custom_collections, smart_collections, collection_metafields,\n *     customers, customer_metafields, pages, page_metafields,\n *     blogs, articles, redirects, theme_assets,\n *     metafield_definitions, metaobject_definitions, metaobjects,\n *     shop_metafields, price_rules, script_tags\n *\n * dry_run: true to preview without making changes.\n * skip_existing: true to skip resources that already exist.\n */\n\nconst config = {\n  source: 'local',\n  backup_path: '/backups/data/REPLACE_WITH_BACKUP_FILENAME.json',\n  backup_file_id: '',\n  resources: 'all',\n  dry_run: true,\n  skip_existing: false\n};\n\nreturn [{ json: config }];"
+      },
+      "id": "rst-0002",
+      "name": "Restore Configuration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{
+            "id": "source-check",
+            "leftValue": "={{ $json.source }}",
+            "rightValue": "gdrive",
+            "operator": { "type": "string", "operation": "equals" }
+          }]
+        }
+      },
+      "id": "rst-0003",
+      "name": "Source?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [660, 300]
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": "={{ $('Restore Configuration').item.json.backup_file_id }}",
+        "options": {}
+      },
+      "id": "rst-0004",
+      "name": "Download from Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [880, 200],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "REPLACE_WITH_YOUR_CREDENTIAL_ID",
+          "name": "Google Drive OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "filePath": "/tmp/shopify-restore-input.json",
+        "options": {}
+      },
+      "id": "rst-0005",
+      "name": "Save to Temp",
+      "type": "n8n-nodes-base.writeBinaryFile",
+      "typeVersion": 1,
+      "position": [1100, 200]
+    },
+    {
+      "parameters": {
+        "jsCode": "const config = $('Restore Configuration').item.json;\n\n// Determine which file to restore from\nconst filePath = config.source === 'gdrive'\n  ? '/tmp/shopify-restore-input.json'\n  : config.backup_path;\n\nlet resourcesArg = '';\nif (config.resources && config.resources !== 'all') {\n  resourcesArg = ` --resources ${config.resources}`;\n}\n\nlet flags = '';\nif (config.dry_run) flags += ' --dry-run';\nif (config.skip_existing) flags += ' --skip-existing';\n\nconst scriptPath = $env.SHOPIFY_RESTORE_SCRIPT_PATH || '/opt/shopify-backup/shopify-restore.mjs';\nconst command = `node ${scriptPath} --file ${filePath}${resourcesArg}${flags}`;\n\nreturn [{ json: { command, filePath, config } }];"
+      },
+      "id": "rst-0006",
+      "name": "Build Restore Command",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1100, 400]
+    },
+    {
+      "parameters": {
+        "command": "={{ $json.command }}",
+        "options": {
+          "env": {
+            "env": [
+              { "name": "SHOPIFY_STORE", "value": "={{ $env.SHOPIFY_STORE }}" },
+              { "name": "SHOPIFY_ACCESS_TOKEN", "value": "={{ $env.SHOPIFY_ACCESS_TOKEN }}" },
+              { "name": "SHOPIFY_API_VERSION", "value": "={{ $env.SHOPIFY_API_VERSION || '2025-01' }}" }
+            ]
+          },
+          "timeout": 7200000
+        }
+      },
+      "id": "rst-0007",
+      "name": "Run Restore Script",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1320, 400],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = $input.first().json.stdout?.trim();\nconst stderr = $input.first().json.stderr || '';\n\nlet result = {};\ntry { result = JSON.parse(stdout); } catch { result = { raw: stdout }; }\n\nreturn [{\n  json: {\n    status: result.success ? 'success' : 'completed_with_errors',\n    ...result,\n    log_tail: stderr.split('\\n').slice(-30).join('\\n'),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "rst-0008",
+      "name": "Parse Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nreturn [{\n  json: {\n    status: 'failed',\n    error: (input.stderr || input.message || 'Unknown').split('\\n').slice(-20).join('\\n'),\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "rst-0009",
+      "name": "Error Handler",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1540, 520]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{ "node": "Restore Configuration", "type": "main", "index": 0 }]]
+    },
+    "Restore Configuration": {
+      "main": [[{ "node": "Source?", "type": "main", "index": 0 }]]
+    },
+    "Source?": {
+      "main": [
+        [{ "node": "Download from Google Drive", "type": "main", "index": 0 }],
+        [{ "node": "Build Restore Command", "type": "main", "index": 0 }]
+      ]
+    },
+    "Download from Google Drive": {
+      "main": [[{ "node": "Save to Temp", "type": "main", "index": 0 }]]
+    },
+    "Save to Temp": {
+      "main": [[{ "node": "Build Restore Command", "type": "main", "index": 0 }]]
+    },
+    "Build Restore Command": {
+      "main": [[{ "node": "Run Restore Script", "type": "main", "index": 0 }]]
+    },
+    "Run Restore Script": {
+      "main": [
+        [{ "node": "Parse Results", "type": "main", "index": 0 }],
+        [{ "node": "Error Handler", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveExecutionProgress": true,
+    "timezone": "Europe/Amsterdam"
+  },
+  "tags": [{ "name": "shopify" }, { "name": "restore" }],
+  "pinData": {}
+}
