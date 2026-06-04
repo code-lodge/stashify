@@ -175,6 +175,15 @@ RCLONE_MEDIA_PATH=Shopify Backups/media
 RCLONE_CONFIG=/home/node/data/rclone/rclone.conf
 ```
 
+> **Required for all workflows:** these workflows read the variables above via
+> `{{ $env.VAR }}` expressions. n8n blocks expression access to environment
+> variables by default, so you must also set:
+> ```env
+> N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+> ```
+> Without it, nodes show **`[access to env vars denied]`**. Restart n8n after
+> changing it.
+
 ### 4. Import Workflows
 
 In n8n: **Workflows** → **Import from File** → select the JSON.

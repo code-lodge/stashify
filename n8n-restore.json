@@ -57,12 +57,14 @@
     },
     {
       "parameters": {
-        "filePath": "/tmp/shopify-restore-input.json",
+        "operation": "write",
+        "fileName": "/tmp/shopify-restore-input.json",
+        "dataPropertyName": "data",
         "options": {}
       },
       "id": "rst-0005",
       "name": "Save to Temp",
-      "type": "n8n-nodes-base.writeBinaryFile",
+      "type": "n8n-nodes-base.readWriteFile",
       "typeVersion": 1,
       "position": [1100, 200]
     },
