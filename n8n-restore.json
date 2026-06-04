@@ -84,6 +84,8 @@
             "env": [
               { "name": "SHOPIFY_STORE", "value": "={{ $env.SHOPIFY_STORE }}" },
               { "name": "SHOPIFY_ACCESS_TOKEN", "value": "={{ $env.SHOPIFY_ACCESS_TOKEN }}" },
+              { "name": "SHOPIFY_CLIENT_ID", "value": "={{ $env.SHOPIFY_CLIENT_ID }}" },
+              { "name": "SHOPIFY_CLIENT_SECRET", "value": "={{ $env.SHOPIFY_CLIENT_SECRET }}" },
               { "name": "SHOPIFY_API_VERSION", "value": "={{ $env.SHOPIFY_API_VERSION || '2025-01' }}" }
             ]
           },

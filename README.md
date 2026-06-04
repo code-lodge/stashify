@@ -81,7 +81,18 @@ Media sync is **incremental** — only new or changed files are downloaded.
 
 ### 1. Create Shopify Custom App
 
-Shopify admin → **Settings** → **Apps and sales channels** → **Develop apps** → **Create an app**
+Create an app in the Shopify **Dev Dashboard** (the **Apps** section → develop/create an app) and assign it the Admin API scopes below.
+
+> **Heads up — token model changed.** Apps created in the Dev Dashboard no
+> longer expose a static `shpat_…` Admin API access token. Instead the app gives
+> you a **Client ID** (Klant-ID) and **Client Secret** (Geheim), which these
+> scripts exchange for a short-lived (~24h) token automatically via the
+> [client credentials grant](https://shopify.dev/docs/apps/build/dev-dashboard/get-api-access-tokens).
+> You provide `SHOPIFY_CLIENT_ID` + `SHOPIFY_CLIENT_SECRET` instead of a token.
+>
+> If you have an older **admin-managed** custom app that still issues a static
+> `shpat_…` token, you can keep using it via `SHOPIFY_ACCESS_TOKEN` — the
+> scripts accept either.
 
 Required Admin API scopes:
 
@@ -102,7 +113,9 @@ read_metaobject_definitions    write_metaobject_definitions
 read_metaobject_entries        write_metaobject_entries
 ```
 
-Install the app and copy the **Admin API access token**.
+Install the app, then copy its **Client ID** (Klant-ID) and **Client Secret**
+(Geheim) from the app's credentials/settings screen. (For a legacy
+admin-managed custom app, copy the **Admin API access token** instead.)
 
 ### 2. Copy Scripts Into the Container
 
@@ -134,8 +147,15 @@ Add these to your n8n instance (CasaOS app settings or container environment):
 
 ```env
 SHOPIFY_STORE=your-store.myshopify.com
-SHOPIFY_ACCESS_TOKEN=shpat_your_access_token_here
 SHOPIFY_API_VERSION=2025-01
+
+# Dev Dashboard app (recommended) — scripts fetch a short-lived token:
+SHOPIFY_CLIENT_ID=your_client_id_here
+SHOPIFY_CLIENT_SECRET=your_client_secret_here
+
+# OR, for a legacy admin-managed custom app with a static token, use this
+# instead of the CLIENT_ID/SECRET pair above:
+# SHOPIFY_ACCESS_TOKEN=shpat_your_access_token_here
 ```
 
 **Local workflow only:**
@@ -175,7 +195,9 @@ Verify the scripts work against your store before importing to n8n:
 
 ```bash
 export SHOPIFY_STORE=your-store.myshopify.com
-export SHOPIFY_ACCESS_TOKEN=shpat_xxx
+export SHOPIFY_CLIENT_ID=your_client_id
+export SHOPIFY_CLIENT_SECRET=your_client_secret
+# (or, for a legacy app: export SHOPIFY_ACCESS_TOKEN=shpat_xxx)
 export BACKUP_OUTPUT_DIR=/tmp/shopify-test
 
 # Run data backup

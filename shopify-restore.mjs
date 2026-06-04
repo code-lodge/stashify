@@ -11,7 +11,10 @@
  *
  * Environment variables:
  *   SHOPIFY_STORE        – mystore.myshopify.com (without https://)
- *   SHOPIFY_ACCESS_TOKEN – Admin API access token from your custom app
+ *   SHOPIFY_ACCESS_TOKEN – Admin API access token (legacy admin-managed custom
+ *                          apps). Optional if CLIENT_ID/SECRET are set.
+ *   SHOPIFY_CLIENT_ID    – Dev Dashboard app Client ID (Klant-ID).
+ *   SHOPIFY_CLIENT_SECRET – Dev Dashboard app Client Secret (Geheim).
  *   SHOPIFY_API_VERSION  – API version (default: 2025-01)
  *
  * Arguments:
@@ -70,12 +73,16 @@ if (!flags.file) {
 // ---------------------------------------------------------------------------
 
 const STORE = process.env.SHOPIFY_STORE;
-const TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+let TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
+const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
 const API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-01';
 
-if (!STORE || !TOKEN) {
+if (!STORE || (!TOKEN && !(CLIENT_ID && CLIENT_SECRET))) {
   console.error(
-    'ERROR: SHOPIFY_STORE and SHOPIFY_ACCESS_TOKEN environment variables are required.'
+    'ERROR: SHOPIFY_STORE is required, plus either SHOPIFY_ACCESS_TOKEN ' +
+      '(legacy admin-managed custom apps) or both SHOPIFY_CLIENT_ID and ' +
+      'SHOPIFY_CLIENT_SECRET (Dev Dashboard apps).'
   );
   process.exit(1);
 }
@@ -1049,11 +1056,53 @@ async function runRestore() {
 }
 
 // ---------------------------------------------------------------------------
+// Authentication
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve the Admin API access token.
+ *
+ * If SHOPIFY_ACCESS_TOKEN is set (legacy admin-managed custom apps), it is used
+ * directly. Otherwise the Client ID / Client Secret from a Dev Dashboard app
+ * are exchanged for a short-lived (~24h) token via the client credentials
+ * grant. A single restore run fits comfortably inside the token lifetime.
+ *
+ * @see https://shopify.dev/docs/apps/build/dev-dashboard/get-api-access-tokens
+ */
+async function resolveToken() {
+  if (TOKEN) return;
+
+  log('🔑 Exchanging client credentials for a short-lived access token...');
+  const response = await fetch(`https://${STORE}/admin/oauth/access_token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+    }),
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Token exchange failed (${response.status}): ${body}`);
+  }
+
+  const data = await response.json();
+  if (!data.access_token) {
+    throw new Error('Token exchange returned no access_token');
+  }
+  TOKEN = data.access_token;
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
-runRestore().catch((err) => {
-  log(`❌ Restore failed: ${err.message}`);
-  log(err.stack);
-  process.exit(1);
-});
+resolveToken()
+  .then(runRestore)
+  .catch((err) => {
+    log(`❌ Restore failed: ${err.message}`);
+    log(err.stack);
+    process.exit(1);
+  });
