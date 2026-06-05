@@ -17,6 +17,9 @@
  *   SHOPIFY_CLIENT_ID    – Dev Dashboard app Client ID (Klant-ID).
  *   SHOPIFY_CLIENT_SECRET – Dev Dashboard app Client Secret (Geheim).
  *   SHOPIFY_API_VERSION  – API version (default: 2025-01)
+ *   SHOPIFY_MIN_REQUEST_INTERVAL_MS – Min delay between API requests in ms
+ *                          (default: 560). Raise to ~N × 560 when running N
+ *                          jobs concurrently against the same token.
  *   MEDIA_OUTPUT_DIR     – Output directory (default: /tmp/shopify-media)
  *   MEDIA_CONCURRENCY    – Parallel downloads (default: 6)
  *
@@ -62,8 +65,14 @@ if (!STORE || (!TOKEN && !(CLIENT_ID && CLIENT_SECRET))) {
 const BASE_URL = `https://${STORE}/admin/api/${API_VERSION}`;
 const GQL_URL = `https://${STORE}/admin/api/${API_VERSION}/graphql.json`;
 
-// API rate limiting (same as backup script)
-const MIN_REQUEST_INTERVAL_MS = 560;
+// API rate limiting (same as backup script). Shopify's REST limit (2 req/s) is
+// shared per store/access token across all processes, so raise this via
+// SHOPIFY_MIN_REQUEST_INTERVAL_MS (~N × 560 ms) when this runs alongside other
+// backup/sync jobs on the same token.
+const MIN_REQUEST_INTERVAL_MS = Math.max(
+  0,
+  parseInt(process.env.SHOPIFY_MIN_REQUEST_INTERVAL_MS || '560', 10) || 560
+);
 let lastApiRequestTime = 0;
 
 // ---------------------------------------------------------------------------
