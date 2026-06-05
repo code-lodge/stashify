@@ -16,6 +16,9 @@
  *   SHOPIFY_CLIENT_ID    – Dev Dashboard app Client ID (Klant-ID).
  *   SHOPIFY_CLIENT_SECRET – Dev Dashboard app Client Secret (Geheim).
  *   SHOPIFY_API_VERSION  – API version (default: 2025-01)
+ *   SHOPIFY_MIN_REQUEST_INTERVAL_MS – Min delay between API requests in ms
+ *                          (default: 560). Raise to ~N × 560 when running N
+ *                          jobs concurrently against the same token.
  *
  * Arguments:
  *   --file <path>        – Path to backup JSON file (required)
@@ -130,7 +133,13 @@ for (const r of resourcesToRestore) {
 // Rate limiting & HTTP helpers (same as backup script)
 // ---------------------------------------------------------------------------
 
-const MIN_REQUEST_INTERVAL_MS = 560;
+// Per store/access token, shared across all processes. Override via
+// SHOPIFY_MIN_REQUEST_INTERVAL_MS when running alongside other backup/restore
+// jobs on the same token (use ~N × 560 ms for N concurrent jobs).
+const MIN_REQUEST_INTERVAL_MS = Math.max(
+  0,
+  parseInt(process.env.SHOPIFY_MIN_REQUEST_INTERVAL_MS || '560', 10) || 560
+);
 let lastRequestTime = 0;
 
 async function throttle() {

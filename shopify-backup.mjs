@@ -17,6 +17,9 @@
  *                          SHOPIFY_CLIENT_SECRET to fetch a short-lived token.
  *   SHOPIFY_CLIENT_SECRET – Dev Dashboard app Client Secret (Geheim).
  *   SHOPIFY_API_VERSION  – API version (default: 2025-01)
+ *   SHOPIFY_MIN_REQUEST_INTERVAL_MS – Min delay between API requests in ms
+ *                          (default: 560). Raise to ~N × 560 when running N
+ *                          jobs concurrently against the same token.
  *   BACKUP_OUTPUT_DIR    – Output directory (default: /tmp/shopify-backups)
  *
  * Output:
@@ -59,9 +62,19 @@ if (!STORE || (!TOKEN && !(CLIENT_ID && CLIENT_SECRET))) {
 const BASE_URL = `https://${STORE}/admin/api/${API_VERSION}`;
 const GQL_URL = `https://${STORE}/admin/api/${API_VERSION}/graphql.json`;
 
-// Shopify REST rate limit: bucket of 40, leak rate 2/s.
-// We throttle to ~1.8 req/s to stay safely under the limit.
-const MIN_REQUEST_INTERVAL_MS = 560;
+// Shopify REST rate limit: bucket of 40, leak rate 2/s (per store/access token,
+// shared across ALL processes using that token). The default 560 ms keeps a
+// single process at ~1.8 req/s, just under the 2/s ceiling.
+//
+// The bucket is shared, so if you run N backups concurrently against the same
+// store you must slow each one to ~1.8/N req/s, i.e. roughly N × 560 ms.
+// Override via SHOPIFY_MIN_REQUEST_INTERVAL_MS (e.g. 1120 for two concurrent
+// runs, 1680 for three). Shopify Plus has a 4/s ceiling and can use a smaller
+// value.
+const MIN_REQUEST_INTERVAL_MS = Math.max(
+  0,
+  parseInt(process.env.SHOPIFY_MIN_REQUEST_INTERVAL_MS || '560', 10) || 560
+);
 let lastRequestTime = 0;
 
 // ---------------------------------------------------------------------------
