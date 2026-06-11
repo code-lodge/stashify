@@ -51,7 +51,7 @@
     {
       "parameters": {
         "operation": "read",
-        "fileSelector": "={{ $json.filepath }}",
+        "fileSelector": "={{ $('Parse Backup Output').item.json.filepath }}",
         "options": {}
       },
       "id": "gd-0004",
