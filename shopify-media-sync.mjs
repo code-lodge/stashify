@@ -104,23 +104,37 @@ async function apiThrottle() {
   lastApiRequestTime = Date.now();
 }
 
-async function shopifyApiFetch(url, options = {}, retries = 3) {
+const FETCH_RETRIES = 5;
+
+async function shopifyApiFetch(url, options = {}, retries = FETCH_RETRIES) {
   await apiThrottle();
 
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'X-Shopify-Access-Token': TOKEN,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      ...options.headers,
-    },
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        'X-Shopify-Access-Token': TOKEN,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...options.headers,
+      },
+    });
+  } catch (err) {
+    if (retries > 0) {
+      const wait = 2000 * 2 ** (FETCH_RETRIES - retries);
+      log(`  ⏳ Network error (${err.message}), retrying in ${wait}ms...`);
+      await new Promise((r) => setTimeout(r, wait));
+      return shopifyApiFetch(url, options, retries - 1);
+    }
+    throw new Error(`Network failure after retries: ${err.message} (${url})`);
+  }
 
   if (response.status === 429 || response.status >= 500) {
     if (retries > 0) {
       const retryAfter =
-        parseInt(response.headers.get('Retry-After') || '2', 10) * 1000;
+        Math.max(1000, (parseFloat(response.headers.get('Retry-After')) || 2) * 1000) +
+        Math.floor(Math.random() * 1000);
       log(`  ⏳ API rate limited (${response.status}), retrying...`);
       await new Promise((r) => setTimeout(r, retryAfter));
       return shopifyApiFetch(url, options, retries - 1);

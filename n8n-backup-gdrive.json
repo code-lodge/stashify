@@ -4,11 +4,11 @@
     {
       "parameters": {
         "rule": {
-          "interval": [{ "triggerAtHour": 3, "triggerAtMinute": 0 }]
+          "interval": [{ "triggerAtHour": 14, "triggerAtMinute": 0 }]
         }
       },
       "id": "gd-0001",
-      "name": "Daily at 3 AM",
+      "name": "Daily at 2 PM",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [180, 300]
@@ -51,7 +51,7 @@
     {
       "parameters": {
         "operation": "read",
-        "fileSelector": "={{ $json.filepath }}",
+        "fileSelector": "={{ $('Parse Backup Output').item.json.filepath }}",
         "options": {}
       },
       "id": "gd-0004",
@@ -159,7 +159,7 @@
     }
   ],
   "connections": {
-    "Daily at 3 AM": {
+    "Daily at 2 PM": {
       "main": [[{ "node": "Run Data Backup", "type": "main", "index": 0 }]]
     },
     "Run Data Backup": {
