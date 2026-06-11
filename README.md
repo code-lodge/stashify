@@ -191,7 +191,7 @@ In n8n: **Workflows** → **Import from File** → select the JSON.
 | Workflow                 | Purpose                        | Schedule     |
 | ------------------------ | ------------------------------ | ------------ |
 | `n8n-backup-local.json`  | Backup to local/NAS storage    | Daily 2:00AM |
-| `n8n-backup-gdrive.json` | Backup directly to Google Drive| Daily 3:00AM |
+| `n8n-backup-gdrive.json` | Backup directly to Google Drive| Daily 2:00PM |
 | `n8n-restore.json`       | Restore from local or Drive    | Manual       |
 
 Import one or both backup workflows. The restore workflow supports both sources.

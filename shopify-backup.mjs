@@ -41,7 +41,13 @@
  * @license GPL-3.0-or-later
  */
 
-import { createWriteStream, mkdirSync, existsSync } from 'node:fs';
+import {
+  createWriteStream,
+  mkdirSync,
+  existsSync,
+  renameSync,
+  unlinkSync,
+} from 'node:fs';
 import { join } from 'node:path';
 
 // ---------------------------------------------------------------------------
@@ -101,28 +107,48 @@ async function throttle() {
 /**
  * Make an authenticated REST API request with retry logic.
  *
+ * Retries cover both HTTP-level throttling/server errors (429/5xx) and
+ * network-level failures (DNS, connection reset — fetch itself throwing).
+ * The latter are inevitable on multi-hour runs and must not kill the backup.
+ *
  * @param {string} url – Full URL to request
  * @param {object} [options] – Additional fetch options
- * @param {number} [retries=3] – Number of retries on 429/5xx
+ * @param {number} [retries=5] – Number of retries on 429/5xx/network errors
  * @returns {Promise<Response>} – The fetch Response object
  */
-async function shopifyFetch(url, options = {}, retries = 3) {
+const FETCH_RETRIES = 5;
+
+async function shopifyFetch(url, options = {}, retries = FETCH_RETRIES) {
   await throttle();
 
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      'X-Shopify-Access-Token': TOKEN,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      ...options.headers,
-    },
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      ...options,
+      headers: {
+        'X-Shopify-Access-Token': TOKEN,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        ...options.headers,
+      },
+    });
+  } catch (err) {
+    if (retries > 0) {
+      const wait = 2000 * 2 ** (FETCH_RETRIES - retries);
+      log(`  ⏳ Network error (${err.message}), retrying in ${wait}ms...`);
+      await new Promise((r) => setTimeout(r, wait));
+      return shopifyFetch(url, options, retries - 1);
+    }
+    throw new Error(`Network failure after retries: ${err.message} (${url})`);
+  }
 
   if (response.status === 429 || response.status >= 500) {
     if (retries > 0) {
+      // Random jitter de-synchronizes concurrent backup processes that would
+      // otherwise retry in lockstep and collide again.
       const retryAfter =
-        parseInt(response.headers.get('Retry-After') || '2', 10) * 1000;
+        Math.max(1000, (parseFloat(response.headers.get('Retry-After')) || 2) * 1000) +
+        Math.floor(Math.random() * 1000);
       log(`  ⏳ Rate limited or server error (${response.status}), retrying in ${retryAfter}ms...`);
       await new Promise((r) => setTimeout(r, retryAfter));
       return shopifyFetch(url, options, retries - 1);
@@ -651,6 +677,11 @@ async function fetchShopMetafields() {
 // Main backup orchestration
 // ---------------------------------------------------------------------------
 
+// Path of the in-progress .partial file, so the entry-point catch can remove
+// it if the run dies — a crashed run must not leave a file that looks like a
+// valid backup, nor waste space on small disks.
+let activePartialFile = null;
+
 async function runBackup() {
   const startTime = Date.now();
   log('🚀 Starting Shopify backup...');
@@ -669,9 +700,17 @@ async function runBackup() {
   const filename = `shopify-backup_${storeName}_${timestamp}.json`;
   const filepath = join(OUTPUT_DIR, filename);
 
-  const fileStream = createWriteStream(filepath, { encoding: 'utf-8' });
+  // Stream to a .partial file and rename only on success, so consumers
+  // (n8n, retention cleanup) never see a half-written backup.
+  const partialPath = `${filepath}.partial`;
+  activePartialFile = partialPath;
+
+  const fileStream = createWriteStream(partialPath, { encoding: 'utf-8' });
   fileStream.on('error', (err) => {
     log(`❌ Failed writing backup file: ${err.message}`);
+    try {
+      unlinkSync(partialPath);
+    } catch {}
     process.exit(1);
   });
 
@@ -1039,6 +1078,9 @@ async function runBackup() {
     fileStream.on('error', reject);
   });
 
+  renameSync(partialPath, filepath);
+  activePartialFile = null;
+
   log('');
   log(`✅ Backup complete in ${elapsed}s`);
   log(`📁 File: ${filepath}`);
@@ -1097,5 +1139,11 @@ resolveToken()
   .catch((err) => {
     log(`❌ Backup failed: ${err.message}`);
     log(err.stack);
+    if (activePartialFile) {
+      try {
+        unlinkSync(activePartialFile);
+        log(`🧹 Removed partial file: ${activePartialFile}`);
+      } catch {}
+    }
     process.exit(1);
   });
