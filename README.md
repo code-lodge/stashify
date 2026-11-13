@@ -147,7 +147,7 @@ Add these to your n8n instance (CasaOS app settings or container environment):
 
 ```env
 SHOPIFY_STORE=your-store.myshopify.com
-SHOPIFY_API_VERSION=2025-01
+SHOPIFY_API_VERSION=2026-10
 
 # Dev Dashboard app (recommended) — scripts fetch a short-lived token:
 SHOPIFY_CLIENT_ID=your_client_id_here

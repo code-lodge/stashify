@@ -16,7 +16,7 @@
  *   SHOPIFY_CLIENT_ID    – Dev Dashboard app Client ID (Klant-ID). Used with
  *                          SHOPIFY_CLIENT_SECRET to fetch a short-lived token.
  *   SHOPIFY_CLIENT_SECRET – Dev Dashboard app Client Secret (Geheim).
- *   SHOPIFY_API_VERSION  – API version (default: 2025-01)
+ *   SHOPIFY_API_VERSION  – API version (default: 2026-10)
  *   SHOPIFY_MIN_REQUEST_INTERVAL_MS – Min delay between API requests in ms
  *                          (default: 560). Raise to ~N × 560 when running N
  *                          jobs concurrently against the same token.
@@ -58,7 +58,8 @@ const STORE = process.env.SHOPIFY_STORE;
 let TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
-const API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-01';
+const API_VERSION = process.env.SHOPIFY_API_VERSION || '2026-10';
+let versionMismatchLogged = false;
 const OUTPUT_DIR = process.env.BACKUP_OUTPUT_DIR || '/tmp/shopify-backups';
 
 if (!STORE || (!TOKEN && !(CLIENT_ID && CLIENT_SECRET))) {
@@ -140,6 +141,14 @@ async function shopifyFetch(url, options = {}, retries = FETCH_RETRIES) {
       return shopifyFetch(url, options, retries - 1);
     }
     throw new Error(`Network failure after retries: ${err.message} (${url})`);
+  }
+
+  // Shopify silently answers requests for a retired version with the oldest
+  // supported one, so fields can disappear without any version error.
+  const servedVersion = response.headers.get('x-shopify-api-version');
+  if (!versionMismatchLogged && servedVersion && servedVersion !== API_VERSION) {
+    versionMismatchLogged = true;
+    log(`  ⚠️  API version ${API_VERSION} is no longer supported; Shopify answered with ${servedVersion}. Update SHOPIFY_API_VERSION.`);
   }
 
   if (response.status === 429 || response.status >= 500) {
@@ -519,7 +528,7 @@ async function fetchMetafieldDefinitions() {
   const ownerTypes = [
     'PRODUCT', 'PRODUCTVARIANT', 'COLLECTION', 'CUSTOMER',
     'ORDER', 'SHOP', 'PAGE', 'ARTICLE', 'BLOG', 'LOCATION',
-    'COMPANY', 'COMPANY_LOCATION', 'DRAFT_ORDER', 'MARKET',
+    'COMPANY', 'COMPANY_LOCATION', 'DRAFTORDER', 'MARKET',
   ];
   const allDefinitions = {};
 
