@@ -175,6 +175,16 @@ RCLONE_MEDIA_PATH=Shopify Backups/media
 RCLONE_CONFIG=/home/node/data/rclone/rclone.conf
 ```
 
+> **n8n 2.x:** the **Read Backup File** node can only open files in
+> `N8N_RESTRICT_FILE_ACCESS_TO`, which defaults to `~/.n8n-files`. The backup
+> is written to `/tmp/shopify-gdrive`, so allow that directory too (keep the
+> default so other workflows still work):
+> ```env
+> N8N_RESTRICT_FILE_ACCESS_TO=/home/node/.n8n-files;/tmp/shopify-gdrive
+> ```
+> Without it, the node fails with **`Access to the file is not allowed.`**
+> Restart n8n after changing it.
+
 > **Required for all workflows:** these workflows read the variables above via
 > `{{ $env.VAR }}` expressions. n8n blocks expression access to environment
 > variables by default, so you must also set:
@@ -182,7 +192,9 @@ RCLONE_CONFIG=/home/node/data/rclone/rclone.conf
 > N8N_BLOCK_ENV_ACCESS_IN_NODE=false
 > ```
 > Without it, nodes show **`[access to env vars denied]`**. Restart n8n after
-> changing it.
+> changing it. The editor preview of a `{{ $env.VAR }}` field always shows
+> **`[ERROR: not accessible via UI, please run node]`**; that is expected, as
+> the value only resolves when the node runs.
 
 ### 4. Import Workflows
 
