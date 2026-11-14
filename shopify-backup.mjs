@@ -439,10 +439,23 @@ async function writeMetafieldMap(w, key, ownerIds, ownerPath, label) {
   await w.beginObject();
   let count = 0;
   for (const id of ownerIds) {
-    const metafields = await fetchAllPages(
-      `${ownerPath}/${id}/metafields.json`,
-      'metafields'
-    );
+    let metafields;
+    try {
+      metafields = await fetchAllPages(
+        `${ownerPath}/${id}/metafields.json`,
+        'metafields'
+      );
+    } catch (err) {
+      // The owner id list is a snapshot taken at the start of a multi-hour
+      // run; an item deleted from the store before the loop reaches it makes
+      // Shopify answer 404. That is not a backup failure — skip the owner.
+      if (String(err.message).includes('Shopify API 404')) {
+        log(`  ⚠️  ${label} owner ${id} no longer exists (deleted mid-run), skipping`);
+        count++;
+        continue;
+      }
+      throw err;
+    }
     if (metafields.length > 0) {
       await w.key(id);
       await w.value(metafields);
@@ -901,9 +914,15 @@ async function runBackup() {
   for (const blogId of blogIds) {
     await w.key(blogId);
     await w.beginArray();
-    for await (const article of streamPages(`/blogs/${blogId}/articles.json`, 'articles')) {
-      await w.value(article);
-      articleCount++;
+    try {
+      for await (const article of streamPages(`/blogs/${blogId}/articles.json`, 'articles')) {
+        await w.value(article);
+        articleCount++;
+      }
+    } catch (err) {
+      // Blog deleted between the blog listing and this fetch — skip it.
+      if (!String(err.message).includes('Shopify API 404')) throw err;
+      log(`  ⚠️  Blog ${blogId} no longer exists (deleted mid-run), skipping`);
     }
     await w.endArray();
   }
@@ -974,10 +993,18 @@ async function runBackup() {
   await w.beginArray();
   let priceRuleCount = 0;
   for await (const rule of streamPages('/price_rules.json', 'price_rules')) {
-    const codes = await fetchAllPages(
-      `/price_rules/${rule.id}/discount_codes.json`,
-      'discount_codes'
-    );
+    let codes = [];
+    try {
+      codes = await fetchAllPages(
+        `/price_rules/${rule.id}/discount_codes.json`,
+        'discount_codes'
+      );
+    } catch (err) {
+      // Price rule deleted between the listing and this fetch — keep the
+      // rule as listed, just without codes.
+      if (!String(err.message).includes('Shopify API 404')) throw err;
+      log(`  ⚠️  Price rule ${rule.id} no longer exists (deleted mid-run), skipping its codes`);
+    }
     await w.value({ ...rule, discount_codes: codes });
     priceRuleCount++;
   }
