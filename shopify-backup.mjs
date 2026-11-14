@@ -16,7 +16,7 @@
  *   SHOPIFY_CLIENT_ID    – Dev Dashboard app Client ID (Klant-ID). Used with
  *                          SHOPIFY_CLIENT_SECRET to fetch a short-lived token.
  *   SHOPIFY_CLIENT_SECRET – Dev Dashboard app Client Secret (Geheim).
- *   SHOPIFY_API_VERSION  – API version (default: 2025-01)
+ *   SHOPIFY_API_VERSION  – API version (default: 2026-10)
  *   SHOPIFY_MIN_REQUEST_INTERVAL_MS – Min delay between API requests in ms
  *                          (default: 560). Raise to ~N × 560 when running N
  *                          jobs concurrently against the same token.
@@ -58,7 +58,8 @@ const STORE = process.env.SHOPIFY_STORE;
 let TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 const CLIENT_ID = process.env.SHOPIFY_CLIENT_ID;
 const CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET;
-const API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-01';
+const API_VERSION = process.env.SHOPIFY_API_VERSION || '2026-10';
+let versionMismatchLogged = false;
 const OUTPUT_DIR = process.env.BACKUP_OUTPUT_DIR || '/tmp/shopify-backups';
 
 if (!STORE || (!TOKEN && !(CLIENT_ID && CLIENT_SECRET))) {
@@ -140,6 +141,14 @@ async function shopifyFetch(url, options = {}, retries = FETCH_RETRIES) {
       return shopifyFetch(url, options, retries - 1);
     }
     throw new Error(`Network failure after retries: ${err.message} (${url})`);
+  }
+
+  // Shopify silently answers requests for a retired version with the oldest
+  // supported one, so fields can disappear without any version error.
+  const servedVersion = response.headers.get('x-shopify-api-version');
+  if (!versionMismatchLogged && servedVersion && servedVersion !== API_VERSION) {
+    versionMismatchLogged = true;
+    log(`  ⚠️  API version ${API_VERSION} is no longer supported; Shopify answered with ${servedVersion}. Update SHOPIFY_API_VERSION.`);
   }
 
   if (response.status === 429 || response.status >= 500) {
@@ -430,10 +439,23 @@ async function writeMetafieldMap(w, key, ownerIds, ownerPath, label) {
   await w.beginObject();
   let count = 0;
   for (const id of ownerIds) {
-    const metafields = await fetchAllPages(
-      `${ownerPath}/${id}/metafields.json`,
-      'metafields'
-    );
+    let metafields;
+    try {
+      metafields = await fetchAllPages(
+        `${ownerPath}/${id}/metafields.json`,
+        'metafields'
+      );
+    } catch (err) {
+      // The owner id list is a snapshot taken at the start of a multi-hour
+      // run; an item deleted from the store before the loop reaches it makes
+      // Shopify answer 404. That is not a backup failure — skip the owner.
+      if (String(err.message).includes('Shopify API 404')) {
+        log(`  ⚠️  ${label} owner ${id} no longer exists (deleted mid-run), skipping`);
+        count++;
+        continue;
+      }
+      throw err;
+    }
     if (metafields.length > 0) {
       await w.key(id);
       await w.value(metafields);
@@ -519,7 +541,7 @@ async function fetchMetafieldDefinitions() {
   const ownerTypes = [
     'PRODUCT', 'PRODUCTVARIANT', 'COLLECTION', 'CUSTOMER',
     'ORDER', 'SHOP', 'PAGE', 'ARTICLE', 'BLOG', 'LOCATION',
-    'COMPANY', 'COMPANY_LOCATION', 'DRAFT_ORDER', 'MARKET',
+    'COMPANY', 'COMPANY_LOCATION', 'DRAFTORDER', 'MARKET',
   ];
   const allDefinitions = {};
 
@@ -892,9 +914,15 @@ async function runBackup() {
   for (const blogId of blogIds) {
     await w.key(blogId);
     await w.beginArray();
-    for await (const article of streamPages(`/blogs/${blogId}/articles.json`, 'articles')) {
-      await w.value(article);
-      articleCount++;
+    try {
+      for await (const article of streamPages(`/blogs/${blogId}/articles.json`, 'articles')) {
+        await w.value(article);
+        articleCount++;
+      }
+    } catch (err) {
+      // Blog deleted between the blog listing and this fetch — skip it.
+      if (!String(err.message).includes('Shopify API 404')) throw err;
+      log(`  ⚠️  Blog ${blogId} no longer exists (deleted mid-run), skipping`);
     }
     await w.endArray();
   }
@@ -965,10 +993,18 @@ async function runBackup() {
   await w.beginArray();
   let priceRuleCount = 0;
   for await (const rule of streamPages('/price_rules.json', 'price_rules')) {
-    const codes = await fetchAllPages(
-      `/price_rules/${rule.id}/discount_codes.json`,
-      'discount_codes'
-    );
+    let codes = [];
+    try {
+      codes = await fetchAllPages(
+        `/price_rules/${rule.id}/discount_codes.json`,
+        'discount_codes'
+      );
+    } catch (err) {
+      // Price rule deleted between the listing and this fetch — keep the
+      // rule as listed, just without codes.
+      if (!String(err.message).includes('Shopify API 404')) throw err;
+      log(`  ⚠️  Price rule ${rule.id} no longer exists (deleted mid-run), skipping its codes`);
+    }
     await w.value({ ...rule, discount_codes: codes });
     priceRuleCount++;
   }
